@@ -37,6 +37,8 @@ class DriveView:
     def draw(self, surf: pygame.Surface, rect: pygame.Rect, app: "App") -> None:
         f = self.fonts
         gap = f.px(12)
+        if rect.h < f.px(70) or rect.w < f.px(300):     # no room left (a tiny window under several warnings)
+            return
         if rect.h < f.px(480):      # between the flicker boxes: three columns
             inner = pygame.Rect(rect.x + f.px(24), rect.y + f.px(8), rect.w - 2 * f.px(24), rect.h - 2 * f.px(8))
             cmd_w, link_w = round(inner.w * 0.34), round(inner.w * 0.2)

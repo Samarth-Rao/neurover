@@ -199,8 +199,9 @@ class ArenaView:
             pygame.draw.line(surf, theme.MUTED, (x, y - f.px(5)), (x, y + f.px(5)), 2)
         f.text(surf, "1 m", 16, theme.MUTED, ((x0 + x1) / 2, y - f.px(5)), "midbottom", face=theme.DATA)
 
-    def _banners(self, surf, area: pygame.Rect, banners, size: float = 24) -> None:
-        """Problems, one solid band each (dark text on the colour), at the top of ``area``."""
+    def _banners(self, surf, area: pygame.Rect, banners, size: float = 24) -> int:
+        """Problems, one solid band each (dark text on the colour), at the top of ``area``. Returns the
+        bottom of the last one (``area.top`` if there are none)."""
         f = self.fonts
         y = area.top + f.px(12)
         max_w = min(area.w - f.px(24), f.px(900))
@@ -216,3 +217,4 @@ class ArenaView:
                 f.text(surf, line, sz, theme.INK, (r.centerx, r.y + f.px(7) + i * line_h + (line_h - f.font(
                     sz, face=theme.DEMI).get_height()) // 2), "midtop", face=theme.DEMI, max_width=r.w - f.px(20))
             y = r.bottom + f.px(8)
+        return y - f.px(8) if banners else area.top

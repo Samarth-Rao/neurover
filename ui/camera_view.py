@@ -57,5 +57,5 @@ class CameraView:
         surf.blit(hint, hint.get_rect(midleft=(cap.right + f.px(6), box.centery)))
         self._banners(surf, rect, banners)
 
-    def _banners(self, surf, area: pygame.Rect, banners) -> None:
-        ArenaView._banners(self, surf, area, banners, size=21)
+    def _banners(self, surf, area: pygame.Rect, banners) -> int:
+        return ArenaView._banners(self, surf, area, banners, size=21)

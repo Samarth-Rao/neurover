@@ -428,10 +428,10 @@ class App:
                 and not self.show_decoding)
 
     def _draw_no_sim(self, surf, rect: pygame.Rect) -> None:
-        """No simulated arena (driving the real rover): the drive view, or blank; warnings on top."""
+        """No simulated arena (driving the real rover): warnings, then the drive view below them (or blank)."""
+        bottom = self.arena_view._banners(surf, rect, self.banners())
         if self._drive_shown():
-            self.drive_view.draw(surf, rect, self)
-        self.arena_view._banners(surf, rect, self.banners())
+            self.drive_view.draw(surf, pygame.Rect(rect.x, bottom, rect.w, rect.bottom - bottom), self)
 
     def banners(self) -> list[tuple[str, tuple[int, int, int]]]:
         out = []
