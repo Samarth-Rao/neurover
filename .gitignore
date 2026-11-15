@@ -8,3 +8,6 @@ __pycache__/
 logs/
 screenshots/
 models/
+recordings/
+scope_placement.json
+archive/

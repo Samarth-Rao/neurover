@@ -1,5 +1,5 @@
 import commands as C
-from pipeline.smoother import Smoother
+from rover.smoother import Smoother
 
 HOP = 0.05
 
@@ -90,3 +90,15 @@ def test_after_deadman_a_full_fresh_streak_is_required():
     assert not sm.deadman
     t = feed(sm, [C.FORWARD], t)
     assert sm.output(t) == C.FORWARD
+
+
+def test_a_forced_stop_is_adopted_at_once():
+    s = Smoother(n_windows=3, threshold=0.5, deadman_s=1.0)
+    for k in range(3):
+        s.update("F", 0.9, k * 0.1)
+    assert s.command == "F"
+    assert s.update("S", 0.0, 0.3, force=True) == "S"      # the stop gate: no debounce, whatever the confidence
+    s.update("F", 0.9, 0.4)
+    s.update("F", 0.9, 0.5)
+    assert s.command == "S"                                # driving again needs a fresh full streak
+    assert s.update("F", 0.9, 0.6) == "F"

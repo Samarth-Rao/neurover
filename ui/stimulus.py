@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional
 
 import pygame
 
@@ -18,10 +18,14 @@ import config
 from . import theme
 from .theme import Fonts
 
+if TYPE_CHECKING:
+    from eeg import cues
+
 _ARROWS = {"up": "↑", "down": "↓", "left": "←", "right": "→"}
 
+_HZ = [config.SSVEP_REFRESH_HZ / n for n in config.SSVEP_FRAMES.values()]
 WARNING_LINES = (
-    "This mode shows flashing lights at 8–15 Hz.",
+    f"This mode shows flashing lights at {min(_HZ):g}–{max(_HZ):.0f} Hz.",
     "Flicker in this range can trigger seizures in people with photosensitive epilepsy.",
     "Do not continue if you, or anyone who can see the screen, has epilepsy or has ever had a seizure.",
     "Stop immediately if anyone feels dizzy, has altered vision, twitching, or any discomfort.",
@@ -97,9 +101,12 @@ def box_size(fonts: Fonts) -> int:
 
 def draw_boxes(surf: pygame.Surface, fonts: Fonts, layout: StimulusLayout, stim: Stimulus,
                freqs: Mapping[str, float], command_map: Mapping[str, str], active: Optional[str],
-               highlight: Optional[str] = None) -> None:
+               highlight: Optional[str] = None, blank: bool = False) -> None:
+    """The flicker boxes (only those in config.SSVEP_FRAMES). ``blank``: dark, not flickering (a pause)."""
     f = fonts
     for label, rect in layout.boxes.items():
+        if label not in stim.patterns:
+            continue
         cmd = command_map.get(label)
         # Static frame: command colour when that command is being sent; yellow when calibration asks for it.
         if highlight == label:
@@ -107,98 +114,243 @@ def draw_boxes(surf: pygame.Surface, fonts: Fonts, layout: StimulusLayout, stim:
         elif active is not None and cmd == active:
             pygame.draw.rect(surf, theme.cmd_color(cmd), rect.inflate(f.px(16), f.px(16)), width=f.px(6),
                              border_radius=f.px(6))
-        pygame.draw.rect(surf, (255, 255, 255) if stim.is_on(label) else (0, 0, 0), rect)
+        pygame.draw.rect(surf, (255, 255, 255) if stim.is_on(label) and not blank else (0, 0, 0), rect)
         pygame.draw.rect(surf, theme.EDGE, rect, width=1)
-        text = f"{_ARROWS[label]} {cmd}  {freqs[label]:.1f} Hz"
-        # Labels sit on the side facing the centre, never on the flickering square itself.
+    # Labels sit on the side facing the centre, never on the flickering square itself; quiet grey, static.
+    for label, r in box_labels(f, layout, stim, freqs, command_map).items():
+        surf.blit(f.render(_label_text(label, freqs, command_map), _LABEL_SIZE, theme.MUTED, face=theme.DATA), r)
+
+
+_LABEL_SIZE = 22
+
+
+def _label_text(label: str, freqs: Mapping[str, float], command_map: Mapping[str, str]) -> str:
+    return f"{_ARROWS[label]} {command_map.get(label)}   {freqs[label]:.1f} Hz"
+
+
+def box_labels(fonts: Fonts, layout: StimulusLayout, stim: Stimulus, freqs: Mapping[str, float],
+               command_map: Mapping[str, str]) -> dict[str, pygame.Rect]:
+    """Where each box's label goes: under the box (over it for the bottom one), clear of the calibration
+    frame around the box, and never into the centre view."""
+    f = fonts
+    out = {}
+    for label, rect in layout.boxes.items():
+        if label not in stim.patterns:
+            continue
+        r = f.render(_label_text(label, freqs, command_map), _LABEL_SIZE, theme.MUTED, face=theme.DATA).get_rect()
         if label == "down":
-            f.text(surf, text, 22, theme.MUTED, (rect.centerx, rect.top - f.px(12)), "midbottom", bold=True)
+            r.midbottom = (rect.centerx, rect.top - f.px(16))
         else:
-            f.text(surf, text, 22, theme.MUTED, (rect.centerx, rect.bottom + f.px(12)), "midtop", bold=True)
+            r.midtop = (rect.centerx, rect.bottom + f.px(16))
+            if label == "up" and r.bottom > layout.centre.top - 2:
+                r.top = max(rect.bottom + f.px(4), layout.centre.top - 2 - r.h)
+        out[label] = r
+    return out
+
+
+def panels_clear_of(panels: Mapping[str, pygame.Rect], obstacles, gap: int) -> dict[str, pygame.Rect]:
+    """The dashboard panels, shortened where they would run into a box label or a box itself (small
+    windows: there a corner panel would otherwise paint over part of a flickering box)."""
+    out = {}
+    for key, p in panels.items():
+        p = p.copy()
+        for r in obstacles:
+            if not p.colliderect(r.inflate(0, 2 * gap)):
+                continue
+            if r.centery < p.centery:
+                top = r.bottom + gap
+                p.h, p.top = p.bottom - top, top
+            else:
+                p.h = r.top - gap - p.top
+        out[key] = p
+    return out
 
 
 def draw_warning(surf: pygame.Surface, fonts: Fonts) -> None:
-    """Full-screen photosensitivity warning. Enter continues, Esc cancels."""
+    """Full-screen photosensitivity warning, set like a safety sign: a red signal band with the triangle,
+    then the message in a readable column, then the two keys. Enter continues, Esc cancels."""
     f = fonts
     w, h = surf.get_size()
-    surf.fill((12, 6, 6))
+    ground = (12, 6, 6)
+    surf.fill(ground)
     pygame.draw.rect(surf, theme.BAD, (0, 0, w, h), width=f.px(10))
-    y = h * 0.2
-    title = f.text(surf, "PHOTOSENSITIVITY WARNING", 56, theme.BAD, (w / 2 + f.px(40), y), "midtop", bold=True,
-                   max_width=w - 160)
-    # Warning triangle (drawn: the "⚠" glyph is missing from common fonts).
-    s = title.height
-    tx, ty = title.left - f.px(24) - s, title.top
-    pygame.draw.polygon(surf, theme.BAD, [(tx + s / 2, ty), (tx + s, ty + s), (tx, ty + s)])
-    f.text(surf, "!", 44, (12, 6, 6), (tx + s / 2, ty + s * 0.62), "center", bold=True)
-    y += f.px(110)
-    for line in WARNING_LINES:
-        for part in theme.wrap(f, line, 30, int(w * 0.8)):
-            f.text(surf, part, 30, theme.TEXT, (w / 2, y), "midtop")
-            y += f.px(44)
-        y += f.px(10)
-    y += f.px(40)
-    f.text(surf, "Press ENTER to start the flicker    ·    ESC to cancel", 32, theme.WARN, (w / 2, y), "midtop",
-           bold=True, max_width=w - 80)
+    col_w = min(w - f.px(120), f.px(880))         # a readable measure: under ~80 characters a line
+    x0 = (w - col_w) // 2
+    lead = theme.wrap(f, WARNING_LINES[0], 32, col_w, max_lines=4, face=theme.DEMI)
+    rest = [theme.wrap(f, line, 27, col_w, max_lines=4, face=theme.MEDIUM) for line in WARNING_LINES[1:]]
+    lead_h, rest_h = f.px(42), f.px(37)
+    band_h = f.px(96)
+    body_h = len(lead) * lead_h + f.px(18) + sum(len(p) * rest_h + f.px(14) for p in rest)
+    keys_h = f.px(48)
+    y = max(f.px(30), (h - (band_h + f.px(40) + body_h + f.px(36) + keys_h)) // 2)
+
+    band = pygame.Rect(x0, y, col_w, band_h)
+    pygame.draw.rect(surf, theme.BAD, band, border_radius=f.px(6))
+    s = f.px(56)                        # warning triangle (drawn: the glyph is missing from common fonts)
+    tx, ty = band.x + f.px(24), band.centery - s // 2 - f.px(2)
+    pygame.draw.polygon(surf, ground, [(tx + s / 2, ty), (tx + s, ty + s), (tx, ty + s)])
+    f.text(surf, "!", 40, theme.BAD, (tx + s / 2, ty + s * 0.64), "center", face=theme.DATA)
+    f.text(surf, "PHOTOSENSITIVITY WARNING", 54, ground, (tx + s + f.px(22), band.centery + f.px(3)), "midleft",
+           face=theme.DATA, max_width=band.right - f.px(20) - (tx + s + f.px(22)))
+
+    y = band.bottom + f.px(40)
+    for line in lead:
+        f.text(surf, line, 32, theme.TEXT, (x0, y), face=theme.DEMI)
+        y += lead_h
+    y += f.px(18)
+    for para in rest:
+        for line in para:
+            f.text(surf, line, 27, theme.TEXT, (x0, y), face=theme.MEDIUM)
+            y += rest_h
+        y += f.px(14)
+    y += f.px(36)
+    x = x0
+    for key, action in (("Enter", "Start the flicker"), ("Esc", "Cancel")):
+        cap = _big_key(f, surf, key, (x, y + keys_h // 2))
+        x = f.text(surf, action, 30, theme.WARN, (cap.right + f.px(14), cap.centery), "midleft",
+                   face=theme.DEMI).right + f.px(56)
 
 
-class CalibrationRun:
-    """A guided calibration: a list of (label, seconds, prompt) segments run back to back."""
-
-    def __init__(self, segments: Sequence[tuple[str, float, str]], start: float) -> None:
-        self.segments = list(segments)
-        self.start = start
-        self.total_s = sum(d for _, d, _ in self.segments)
-
-    def current(self, now: float) -> Optional[tuple[int, str, float]]:
-        """(segment index, label, seconds left in it), or None when finished."""
-        t = now - self.start
-        for i, (label, dur, _) in enumerate(self.segments):
-            if t < dur:
-                return i, label, dur - t
-            t -= dur
-        return None
+def _big_key(f: Fonts, surf: pygame.Surface, key: str, midleft) -> pygame.Rect:
+    t = f.render(key, 28, theme.TEXT, face=theme.DATA)
+    r = pygame.Rect(0, 0, t.get_width() + f.px(28), t.get_height() + f.px(10))
+    r.midleft = (round(midleft[0]), round(midleft[1]))
+    pygame.draw.rect(surf, (40, 22, 24), r, border_radius=f.px(6))
+    pygame.draw.rect(surf, theme.WARN, r, width=max(1, f.px(2)), border_radius=f.px(6))
+    surf.blit(t, t.get_rect(center=(r.centerx, r.centery + 1)))
+    return r
 
 
-def draw_calibration(surf: pygame.Surface, fonts: Fonts, area: pygame.Rect, run: CalibrationRun,
-                     now: float) -> None:
+def _calibration_text(run: "cues.Run") -> tuple[str, str]:
+    step = run.step
+    k = step.kind
+    if k == "ready":
+        minutes = sum(s.seconds for s in run.steps) / 60
+        if any(s.kind == "away" for s in run.steps):
+            return ("Calibration: get ready", f"About {minutes:.0f} min, like driving. Low beep: look at the rover. "
+                    "Middle beep: turn back; an arrow points at the next box, 3-2-1. High beep: look at that box "
+                    "until its yellow frame goes. Space starts, Esc cancels.")
+        return ("Calibration: get ready", f"About {minutes:.0f} min. Look at the cross in the middle. When a box gets a "
+                "yellow frame (and a beep), look at it until the frame goes; ○ = keep looking at the cross. Relax in "
+                "the pauses. Space starts, Esc cancels.")
+    if k == "go":
+        return "Practice done", "Now for real. Space starts."
+    if k == "break":
+        return "Break", "Relax and rest your eyes. Space continues."
+    if k == "done":
+        return "Done", "Hold on…"
+    where = "practice" if step.practice else f"trial {(step.trial or 0) + 1} of {run.protocol.n_trials}"
+    if k == "away":
+        what = "Look at the rover. The next beep calls you back"
+    elif k == "fixation":
+        what = f"Next: the {_ARROWS.get(step.label, step.label)} box. Look at it on the high beep" \
+            if run.protocol.away_s > 0 else "Look at the cross"
+    elif k == "cue":
+        what = "○ Keep looking at the cross" if step.label == "rest" else \
+            f"Look at the {_ARROWS.get(step.label, step.label)} box until its frame goes"
+    else:
+        what = "Relax"
+    return f"Calibrating: {where}", what
+
+
+_DIRS = {"up": (0.0, -1.0), "down": (0.0, 1.0), "left": (-1.0, 0.0), "right": (1.0, 0.0)}
+
+
+def _arrow(surf: pygame.Surface, fonts: Fonts, centre: tuple[int, int], target: tuple[float, float], color) -> None:
+    """A big arrow at ``centre`` pointing at ``target``."""
     f = fonts
-    cur = run.current(now)
-    if cur is None:
+    dx, dy = target[0] - centre[0], target[1] - centre[1]
+    n = math.hypot(dx, dy) or 1.0
+    dx, dy = dx / n, dy / n
+    half = min(f.px(75), 0.4 * n)
+    tail = (centre[0] - dx * half, centre[1] - dy * half)
+    tip = (centre[0] + dx * half, centre[1] + dy * half)
+    head, wide = f.px(38), f.px(30)
+    base = (tip[0] - dx * head, tip[1] - dy * head)
+    pygame.draw.line(surf, color, tail, base, f.px(16))
+    pygame.draw.polygon(surf, color, [tip, (base[0] - dy * wide, base[1] + dx * wide),
+                                      (base[0] + dy * wide, base[1] - dx * wide)])
+
+
+def _card(surf: pygame.Surface, fonts: Fonts, area: pygame.Rect, width: int, height: int) -> pygame.Rect:
+    """The calibration / fitting card: top centre of ``area``, amber like the cued box's frame."""
+    card = pygame.Rect(0, 0, width, height)
+    card.midtop = (area.centerx, area.top + fonts.px(8))
+    theme.panel(surf, card, fill=theme.PANEL, border=theme.WARN, radius=fonts.px(10), width=fonts.px(2))
+    return card
+
+
+def _progress(surf: pygame.Surface, fonts: Fonts, card: pygame.Rect, frac: float) -> None:
+    f = fonts
+    bar = pygame.Rect(card.x + f.px(18), card.bottom - f.px(18), card.w - f.px(36), f.px(6))
+    pygame.draw.rect(surf, theme.PANEL_HI, bar, border_radius=f.px(3))
+    pygame.draw.rect(surf, theme.WARN, (bar.x, bar.y, max(2, round(bar.w * min(1.0, frac))), bar.h),
+                     border_radius=f.px(3))
+
+
+def draw_calibration(surf: pygame.Surface, fonts: Fonts, area: pygame.Rect, run: "cues.Run", now: float,
+                     boxes: Optional[Mapping[str, pygame.Rect]] = None) -> None:
+    """The cue card over the arena while calibrating (the cued box is framed by draw_boxes); a fixation
+    cross while resting at the screen, or during the hand-over from looking at the rover an arrow at the
+    next box (``boxes``: where they are) with the 3-2-1."""
+    f = fonts
+    if run.finished:
         return
-    i, label, left = cur
-    what = run.segments[i][2]
-    card = pygame.Rect(0, 0, min(area.w - f.px(20), f.px(560)), f.px(118))
-    card.midtop = (area.centerx, area.top + f.px(8))
-    theme.panel(surf, card, fill=theme.PANEL, border=theme.WARN, radius=f.px(10), width=f.px(3))
-    f.text(surf, f"CALIBRATING  {i + 1}/{len(run.segments)}", 20, theme.WARN, (card.x + f.px(16), card.y + f.px(12)),
-           bold=True)
-    f.text(surf, f"{math.ceil(left)} s", 26, theme.TEXT, (card.right - f.px(16), card.y + f.px(10)), "topright",
-           bold=True)
-    f.text(surf, what, 28, theme.TEXT, (card.x + f.px(16), card.y + f.px(42)), bold=True, max_width=card.w - f.px(32))
-    bar = pygame.Rect(card.x + f.px(16), card.bottom - f.px(26), card.w - f.px(32), f.px(10))
-    pygame.draw.rect(surf, theme.PANEL_HI, bar, border_radius=f.px(4))
-    done = (now - run.start) / run.total_s
-    pygame.draw.rect(surf, theme.WARN, (bar.x, bar.y, max(2, round(bar.w * min(1.0, done))), bar.h),
-                     border_radius=f.px(4))
-    if label in ("rest", "open", "ready"):  # fixation cross: look here
-        cx, cy = area.center
-        s = f.px(22)
-        pygame.draw.line(surf, theme.WARN, (cx - s, cy), (cx + s, cy), f.px(4))
-        pygame.draw.line(surf, theme.WARN, (cx, cy - s), (cx, cy + s), f.px(4))
+    title, what = _calibration_text(run)
+    step = run.step
+    left = max(0.0, step.seconds - run.elapsed_in_step(now))
+    width = min(area.w - f.px(20), f.px(620))
+    pad = f.px(18)
+    for size in (22, 19, 17):           # the card grows to fit; in a short view the text steps down instead,
+        lines = theme.wrap(f, what, size, width - 2 * pad, max_lines=8, face=theme.DEMI)   # leaving the cross room
+        line_h = f.px(size * 1.23)
+        height = f.px(44) + line_h * len(lines) + f.px(34)
+        if height <= area.h - f.px(72):
+            break
+    card = _card(surf, f, area, width, height)
+    f.text(surf, title, 18, theme.WARN, (card.x + pad, card.y + f.px(13)), face=theme.DEMI,
+           max_width=card.w - 2 * pad - f.px(70))
+    f.text(surf, f"{math.ceil(left)} s", 26, theme.TEXT, (card.right - pad, card.y + f.px(10)), "topright",
+           face=theme.DATA)
+    y = card.y + f.px(42)
+    for line in lines:
+        f.text(surf, line, size, theme.TEXT, (card.x + pad, y), face=theme.DEMI)
+        y += line_h
+    total = sum(s.seconds for s in run.steps)
+    _progress(surf, f, card, 1.0 - run.remaining(now) / total if total else 1.0)
+    if step.kind == "fixation" and run.protocol.away_s > 0:        # hand-over: where to look next, 3, 2, 1
+        cx, cy = area.centerx, (card.bottom + area.bottom) // 2
+        box = (boxes or {}).get(step.label)
+        d = _DIRS.get(step.label, (0.0, -1.0))
+        _arrow(surf, f, (cx, cy), box.center if box is not None else (cx + d[0] * 500, cy + d[1] * 500), theme.WARN)
+        num = (cx, cy + f.px(110)) if d[1] == 0 else (cx + f.px(110), cy)   # beside the arrow, not on it
+        f.text(surf, str(max(1, math.ceil(left))), 64, theme.WARN, num, "center", face=theme.DATA)
+        return
+    if step.kind in ("ready", "go", "fixation") or (step.kind == "cue" and step.label == "rest"):
+        cx, cy = area.centerx, (card.bottom + area.bottom) // 2      # fixation cross, clear of the card: look here
+        sz = f.px(22)
+        cy = max(cy, card.bottom + sz + f.px(10))                     # (a tiny window: below the card, not on it)
+        pygame.draw.line(surf, theme.WARN, (cx - sz, cy), (cx + sz, cy), f.px(4))
+        pygame.draw.line(surf, theme.WARN, (cx, cy - sz), (cx, cy + sz), f.px(4))
+        if step.kind == "cue":
+            pygame.draw.circle(surf, theme.WARN, (cx, cy), f.px(40), f.px(3))
+        if step.kind == "fixation":                    # 3, 2, 1: the cue comes when it runs out
+            f.text(surf, str(max(1, math.ceil(left))), 56, theme.WARN, (cx + sz + f.px(18), cy), "midleft",
+                   face=theme.DATA)
 
 
 def draw_fitting(surf: pygame.Surface, fonts: Fonts, area: pygame.Rect, what: str, frac: float) -> None:
     """Card while the calibration is being fitted (the rover stays stopped)."""
     f = fonts
-    card = pygame.Rect(0, 0, min(area.w - f.px(20), f.px(560)), f.px(96))
-    card.midtop = (area.centerx, area.top + f.px(8))
-    theme.panel(surf, card, fill=theme.PANEL, border=theme.WARN, radius=f.px(10), width=f.px(3))
-    f.text(surf, "FITTING THE DECODER TO YOUR CALIBRATION", 20, theme.WARN, (card.x + f.px(16), card.y + f.px(12)),
-           bold=True, max_width=card.w - f.px(32))
-    f.text(surf, f"{what}…  (Esc keeps the old one)", 22, theme.TEXT, (card.x + f.px(16), card.y + f.px(40)),
-           max_width=card.w - f.px(32))
-    bar = pygame.Rect(card.x + f.px(16), card.bottom - f.px(22), card.w - f.px(32), f.px(10))
-    pygame.draw.rect(surf, theme.PANEL_HI, bar, border_radius=f.px(4))
-    pygame.draw.rect(surf, theme.WARN, (bar.x, bar.y, max(2, round(bar.w * min(1.0, frac))), bar.h),
-                     border_radius=f.px(4))
+    pad = f.px(18)
+    card = _card(surf, f, area, min(area.w - f.px(20), f.px(620)), f.px(104))
+    f.text(surf, "Fitting the decoder to your calibration", 18, theme.WARN, (card.x + pad, card.y + f.px(13)),
+           face=theme.DEMI, max_width=card.w - 2 * pad)
+    cy = card.y + f.px(56)
+    hint = f.render("keeps the old one", 15, theme.MUTED, face=theme.TEXT_FACE)
+    hx = card.right - pad - hint.get_width()
+    surf.blit(hint, hint.get_rect(midleft=(hx, cy)))
+    cap = theme.keycap(f, surf, "Esc", 15, (hx - f.px(6), cy), "midright")
+    f.text(surf, f"{what}…", 20, theme.TEXT, (card.x + pad, cy), "midleft", face=theme.DEMI,
+           max_width=cap.left - f.px(16) - (card.x + pad))
+    _progress(surf, f, card, frac)

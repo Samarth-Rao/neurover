@@ -2,11 +2,10 @@ import csv
 from typing import Optional
 
 import commands as C
-from pipeline.controller import Controller
-from pipeline.session_log import HEADER, SessionLog
-from sinks.base import Sink
-from sinks.sim_sink import Arena, RoverSim, SimSink
-from sources.base import Prediction, Source
+from rover.controller import Controller
+from rover.session_log import HEADER, SessionLog
+from rover.sim import Arena, RoverSim, SimSink, Sink
+from rover.source import Prediction, Source
 
 
 class ScriptedSource(Source):
@@ -28,11 +27,12 @@ class ScriptedSource(Source):
     def stop(self):
         pass
 
-    def latest(self):
+    def poll(self):
         if self.alive and (self._last is None or self.now - self._last.timestamp >= self.hop):
             label, conf = self.script(self.now)
-            self._last = Prediction(label, conf, None, self.now)
-        return self._last
+            self._last = Prediction(label, conf, self.now)
+            return [self._last]
+        return []
 
 
 class RecordingSink(Sink):

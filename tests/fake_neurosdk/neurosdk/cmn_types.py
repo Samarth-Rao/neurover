@@ -1,4 +1,4 @@
-"""Subset of neurosdk.cmn_types used by neurorover, with the same names and values."""
+"""Subset of neurosdk.cmn_types used by neurover, with the same names and values."""
 from dataclasses import dataclass
 from enum import Enum
 

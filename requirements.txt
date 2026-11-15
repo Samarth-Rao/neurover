@@ -1,9 +1,8 @@
 pygame>=2.5
 numpy>=1.24
-scikit-learn>=1.3
 scipy>=1.10
-pyserial>=3.5
-pyomyo>=0.0.5
+scikit-learn>=1.3   # the scope's cued-trial classifier
 pyneurosdk2>=1.0.15
+bleak>=0.22         # the real rover (micro:bit over Bluetooth, main.py --rover)
 pytest>=7.4
-bleak>=0.22         # Myo over the computer's own Bluetooth (no dongle)
+# Only for the Myo code in attic/: pyomyo>=0.0.5

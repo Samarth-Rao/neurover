@@ -7,7 +7,7 @@ import pytest
 
 import commands as C
 import config
-from sinks.sim_sink import RoverSim
+from rover.sim import RoverSim
 from ui import chase_view as cv
 from ui import theme
 from ui.chase_view import ChaseCamera, ChaseView

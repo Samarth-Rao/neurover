@@ -39,8 +39,8 @@ def validate(value: object) -> str:
 def from_label(label: Optional[str], mapping: Mapping[str, str] | None = None) -> Optional[str]:
     """Map a source's raw label to a command.
 
-    Direct sources (keyboard) already emit command letters. Signal sources emit
-    class names (e.g. "fist") that are looked up in ``mapping``. ``None`` means
+    Direct sources (keyboard) already emit command letters. EEG emits class names
+    (a flicker box, e.g. "left", or "rest") that are looked up in ``mapping``. ``None`` means
     the source has no opinion (e.g. no trained model yet) and maps to ``None``.
     """
     if label is None:

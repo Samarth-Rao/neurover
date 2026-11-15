@@ -4,7 +4,7 @@ import pytest
 
 import commands as C
 import config
-from sinks.sim_sink import Arena, RoverSim
+from rover.sim import Arena, RoverSim
 
 FRAME = 1 / 60
 

@@ -4,8 +4,8 @@
 
 Scans, connects to the strongest BrainBit/Flex, prints its family/model/firmware,
 channel names and order, battery, ~3 s of electrode resistance and a few seconds
-of signal statistics, then disconnects. Use it to fill in config.EEG_SDK_CHANNELS
-and EEG_CHANNEL_MAP, or to debug a headband that won't stream.
+of signal statistics, then disconnects. Use it to fill in a device's "map" in config.EEG_DEVICES,
+or to debug a headband that won't stream.
 """
 from __future__ import annotations
 

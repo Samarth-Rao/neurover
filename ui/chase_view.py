@@ -16,7 +16,7 @@ import pygame
 
 import commands
 import config
-from sinks.sim_sink import RoverSim
+from rover.sim import RoverSim
 
 from . import theme
 from .arena_view import ArenaView
@@ -303,17 +303,16 @@ class ChaseView(ArenaView):
             super().draw(surf, rect, None, banners)
             return
         f = self.fonts
-        pad = f.px(24)
-        readout_h = f.px(64)
-        self._readouts(surf, pygame.Rect(rect.x + pad, rect.y + pad, rect.w - 2 * pad, readout_h), sim)
-        view = pygame.Rect(rect.x + pad, rect.y + pad + readout_h + f.px(10),
-                           rect.w - 2 * pad, rect.h - 2 * pad - readout_h - f.px(10))
+        compact = rect.h < f.px(420)     # short view (centre of the SSVEP layout): one-line readouts
+        pad = f.px(24)                   # (kept off the flicker boxes at the sides)
+        pad_y = f.px(8) if compact else pad
+        readout_h = f.px(28) if compact else f.px(64)
+        gap = f.px(6) if compact else f.px(10)
+        self._readouts(surf, pygame.Rect(rect.x + pad, rect.y + pad_y, rect.w - 2 * pad, readout_h), sim, compact)
+        view = pygame.Rect(rect.x + pad, rect.y + pad_y + readout_h + gap,
+                           rect.w - 2 * pad, rect.h - 2 * pad_y - readout_h - gap)
 
-        bl = list(banners)
-        if sim.blocked:
-            bl.insert(0, (f"BLOCKED  ·  obstacle {sim.distance * 100:.0f} cm ahead", theme.BAD))
-        elif sim.link_lost:
-            bl.insert(0, ("NO SIGNAL  ·  rover stopped (link watchdog)", theme.WARN))
+        bl = self.sim_banners(sim, banners)
         if view.w < 40 or view.h < 40:
             self._banners(surf, rect, bl)
             return
@@ -502,7 +501,7 @@ class ChaseView(ArenaView):
         if hit is None:
             return
         f = self.fonts
-        label = f.render(f"{r * 100:.0f} cm", 22, color, bold=True)
+        label = f.render(f"{r * 100:.0f} cm", 22, color, face=theme.DATA)
         inner = view.inflate(-2 * f.px(10), -2 * f.px(10))
         if inner.collidepoint(hit):
             theme.dot(surf, color, hit, f.px(6))
@@ -519,11 +518,11 @@ class ChaseView(ArenaView):
         f = self.fonts
         rad = max(12, min(f.px(24), round(min(view.w, view.h) * 0.06)))
         ring = rad + f.px(11)              # the "N" orbits on this radius
-        legend = f.render("grid 0.5 m", 16, theme.MUTED, bold=True) if view.w >= 560 else None
+        legend = f.render("Grid 0.5 m", 15, theme.MUTED, face=theme.MEDIUM) if view.w >= 560 else None
         half = ring + f.px(11)
         box = pygame.Rect(0, 0, 2 * half + (legend.get_width() + f.px(14) if legend else 0), 2 * half)
         box.bottomleft = (view.left + f.px(10), view.bottom - f.px(10))
-        theme.panel(surf, box, fill=theme.PANEL, border=theme.EDGE, radius=f.px(8))
+        theme.panel(surf, box, fill=theme.PANEL, border=None, radius=f.px(8))
         cx, cy = box.left + half, box.centery
         if legend:
             surf.blit(legend, legend.get_rect(midleft=(cx + half + f.px(4), cy)))
@@ -536,4 +535,4 @@ class ChaseView(ArenaView):
         w = rad * 0.26
         pygame.draw.polygon(surf, theme.BAD, [tip, (cx + px * w, cy + py * w), (cx - px * w, cy - py * w)])
         pygame.draw.polygon(surf, theme.MUTED, [tail, (cx + px * w, cy + py * w), (cx - px * w, cy - py * w)])
-        f.text(surf, "N", 18, theme.TEXT, (cx + nx * ring, cy + ny * ring), "center", bold=True)
+        f.text(surf, "N", 16, theme.TEXT, (cx + nx * ring, cy + ny * ring + 1), "center", face=theme.DATA)

@@ -8,7 +8,7 @@ import pygame
 
 import commands
 import config
-from sinks.sim_sink import RoverSim
+from rover.sim import RoverSim
 
 from . import theme
 from .theme import Fonts
@@ -23,10 +23,11 @@ class ArenaView:
         f = self.fonts
         pad = f.px(24)
         if sim is None:
-            theme.panel(surf, rect.inflate(-2 * pad, -2 * pad), fill=theme.PANEL)
-            f.text(surf, "SIMULATION OFF", 44, theme.MUTED, rect.center, "midbottom", bold=True)
-            f.text(surf, "--no-sim: commands go to the serial rover only", 24, theme.DIM,
-                   (rect.centerx, rect.centery + f.px(8)), "midtop")
+            theme.panel(surf, rect.inflate(-2 * pad, -2 * pad), fill=theme.PANEL, border=None, radius=f.px(8))
+            f.text(surf, "Simulation off", 36, theme.MUTED, rect.center, "midbottom", face=theme.DEMI,
+                   max_width=rect.w - 4 * pad)
+            f.text(surf, "--no-sim: commands go to the serial rover only", 21, theme.DIM,
+                   (rect.centerx, rect.centery + f.px(8)), "midtop", face=theme.TEXT_FACE, max_width=rect.w - 4 * pad)
             self._banners(surf, rect, banners)
             return
 
@@ -63,15 +64,23 @@ class ArenaView:
         self._rover(surf, sim, to_screen, scale)
         self._scale_bar(surf, floor, scale)
 
+        # Banners over the top of the floor, but as wide as the view allows (the floor is small in the
+        # flicker layout, and a wrapped warning would hide it).
+        self._banners(surf, pygame.Rect(rect.x + pad, floor.top, rect.w - 2 * pad, floor.h),
+                      self.sim_banners(sim, banners))
+
+    @staticmethod
+    def sim_banners(sim: RoverSim, banners) -> list:
         bl = list(banners)
         if sim.blocked:
-            bl.insert(0, (f"BLOCKED  ·  obstacle {sim.distance * 100:.0f} cm ahead", theme.BAD))
+            bl.insert(0, (f"Blocked: obstacle {sim.distance * 100:.0f} cm ahead", theme.BAD))
         elif sim.link_lost:
-            bl.insert(0, ("NO SIGNAL  ·  rover stopped (link watchdog)", theme.WARN))
-        self._banners(surf, floor, bl)
+            bl.insert(0, ("No signal: rover stopped (link watchdog)", theme.WARN))
+        return bl
 
     # -- pieces ------------------------------------------------------------------------
-    def _readouts(self, surf, rect: pygame.Rect, sim: RoverSim) -> None:
+    def _readouts(self, surf, rect: pygame.Rect, sim: RoverSim, compact: bool = False) -> None:
+        """Sonar, speed, turn rate and heading: a label over a DIN value, or one line each when ``compact``."""
         f = self.fonts
         d = sim.distance
         if d >= config.ULTRASONIC_MAX_RANGE_M - 1e-6:
@@ -80,18 +89,25 @@ class ArenaView:
             sonar = f"{d * 100:.0f} cm"
             col = theme.BAD if d < config.BLOCK_DISTANCE_M else theme.WARN if d < 0.4 else theme.TEXT
         items = [
-            ("SONAR", sonar, col),
-            ("SPEED", f"{sim.speed:+.2f} m/s", theme.TEXT),
-            ("TURN", f"{math.degrees(sim.turn_rate):+.0f}°/s", theme.TEXT),
-            ("HEADING", f"{sim.heading_deg % 360:.0f}°", theme.TEXT),
+            ("Sonar", sonar, col),
+            ("Speed", f"{sim.speed:+.2f} m/s", theme.TEXT),
+            ("Turn", f"{math.degrees(sim.turn_rate):+.0f}°/s", theme.TEXT),
+            ("Heading", f"{sim.heading_deg % 360:.0f}°", theme.TEXT),
         ]
-        if rect.w < f.px(600):  # small view (e.g. between the SSVEP flicker boxes): sonar + speed only
+        if rect.w < f.px(600 if not compact else 460):  # small view: sonar + speed only
             items = items[:2]
         cw = rect.w / len(items)
         for i, (label, value, color) in enumerate(items):
             x = rect.x + i * cw
-            f.text(surf, label, 17, theme.MUTED, (x, rect.y), bold=True)
-            f.text(surf, value, 32, color, (x, rect.y + f.px(20)), bold=True, max_width=round(cw - f.px(8)))
+            if compact:
+                lab = f.text(surf, label, 15, theme.MUTED, (x, rect.centery), "midleft", face=theme.MEDIUM,
+                             max_width=round(cw - f.px(8)))
+                if lab.right + f.px(8) < x + cw - f.px(30):
+                    f.text(surf, value, 21, color, (lab.right + f.px(8), rect.centery + 1), "midleft",
+                           face=theme.DATA, max_width=round(x + cw - f.px(8) - lab.right - f.px(8)))
+                continue
+            f.text(surf, label, 15, theme.MUTED, (x, rect.y), face=theme.MEDIUM, max_width=round(cw - f.px(8)))
+            f.text(surf, value, 32, color, (x, rect.y + f.px(20)), face=theme.DATA, max_width=round(cw - f.px(8)))
 
     def _grid(self, surf, floor, W, H, scale, to_screen) -> None:
         step = 0.5
@@ -137,8 +153,8 @@ class ArenaView:
         hit = to_screen(ox + math.cos(a) * r, oy + math.sin(a) * r)
         if r < config.ULTRASONIC_MAX_RANGE_M - 1e-6:
             theme.dot(surf, color, hit, self.fonts.px(6))
-            self.fonts.text(surf, f"{r * 100:.0f} cm", 22, color, (hit[0] + self.fonts.px(10), hit[1]),
-                            "midleft", bold=True)
+            self.fonts.text(surf, f"{r * 100:.0f} cm", 22, color, (hit[0] + self.fonts.px(10), hit[1] + 1),
+                            "midleft", face=theme.DATA)
 
     def _rover(self, surf, sim: RoverSim, to_screen, scale) -> None:
         c, s = math.cos(sim.heading), math.sin(sim.heading)
@@ -181,20 +197,22 @@ class ArenaView:
         pygame.draw.line(surf, theme.MUTED, (x0, y), (x1, y), 2)
         for x in (x0, x1):
             pygame.draw.line(surf, theme.MUTED, (x, y - f.px(5)), (x, y + f.px(5)), 2)
-        f.text(surf, "1 m", 18, theme.MUTED, ((x0 + x1) / 2, y - f.px(6)), "midbottom", bold=True)
+        f.text(surf, "1 m", 16, theme.MUTED, ((x0 + x1) / 2, y - f.px(5)), "midbottom", face=theme.DATA)
 
-    def _banners(self, surf, area: pygame.Rect, banners) -> None:
+    def _banners(self, surf, area: pygame.Rect, banners, size: float = 24) -> None:
+        """Problems, one solid band each (dark text on the colour), at the top of ``area``."""
         f = self.fonts
-        y = area.top + f.px(14)
-        max_w = area.w - f.px(28)
+        y = area.top + f.px(12)
+        max_w = min(area.w - f.px(24), f.px(900))
         for text, color in banners:
-            lines = theme.wrap(f, text, 28, max_w - f.px(40), bold=True)
-            line_h = f.font(28, True).get_linesize()
-            w = min(max_w, max(f.font(28, True).size(l)[0] for l in lines) + f.px(40))
-            r = pygame.Rect(0, 0, w, line_h * len(lines) + f.px(16))
+            sz = size if f.width(text, size, face=theme.DEMI) <= max_w - f.px(36) else size * 0.85
+            lines = theme.wrap(f, text, sz, max_w - f.px(36), face=theme.DEMI)
+            line_h = f.px(sz * 1.25)
+            w = min(max_w, max(f.width(line, sz, face=theme.DEMI) for line in lines) + f.px(36))
+            r = pygame.Rect(0, 0, w, line_h * len(lines) + f.px(14))
             r.midtop = (area.centerx, y)
-            pygame.draw.rect(surf, color, r, border_radius=f.px(8))
+            pygame.draw.rect(surf, color, r, border_radius=f.px(6))
             for i, line in enumerate(lines):
-                f.text(surf, line, 28, theme.INK, (r.centerx, r.y + f.px(8) + i * line_h), "midtop", bold=True,
-                       max_width=r.w - f.px(20))
+                f.text(surf, line, sz, theme.INK, (r.centerx, r.y + f.px(7) + i * line_h + (line_h - f.font(
+                    sz, face=theme.DEMI).get_height()) // 2), "midtop", face=theme.DEMI, max_width=r.w - f.px(20))
             y = r.bottom + f.px(8)
