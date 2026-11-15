@@ -1,19 +1,22 @@
 # neurover
 
-Drive a small rover with EEG: the driver looks at one of four flickering boxes (SSVEP) and a
-BrainBit Flex + BrainBit headband pick up which. A simulated rover lets the whole loop be developed
-and demoed before the real one works. A second app, neurover scope, shows, records and compares the
-raw electrode signals and runs cued-trial experiments.
+Drive a real rover with your eyes and EEG. Three boxes flicker on the laptop at different rates
+(SSVEP); look at one and a BrainBit Flex on the back of your head picks up which, and the rover (a
+BBC micro:bit on a DFRobot Maqueen, over Bluetooth) drives that way. Look away at the rover and it
+stops. A simulated rover lets the loop be tried without one. A second app, neurover scope, shows,
+records and compares the raw electrode signals and runs cued-trial experiments.
 
 ```
-BrainBit Flex ─┐                                           ┌─► simulated rover
-               ├─► eeg/: each device on its own clock ─► SSVEP decode ─► smoother ─► F/B/L/R/S @ 10 Hz ─┤
-BrainBit band ─┘    (judge electrodes, weight spikes)                                                 └─► (serial micro:bit later)
+BrainBit Flex ─► eeg/: judge electrodes, weight spikes ─► SSVEP decode ─┐
+                       movement / muscle check ─► stop gate ────────────┴─► smoother ─► F/L/R/S @ 10 Hz ─┬─► real rover (micro:bit, Bluetooth)
+                                                                                                         └─► simulated rover (optional)
 ```
 
-**The command contract:** every source produces, and every sink consumes, exactly five single ASCII
-letters: `F` forward, `B` back, `L` turn left in place, `R` turn right in place, `S` stop. On the wire
-to the micro:bit each is the letter plus `\n`, at 115200 baud, resent at 10 Hz even when unchanged.
+**The command contract:** every source produces, and every sink consumes, single ASCII letters: `F`
+forward, `B` back, `L` / `R` turn in place, `S` stop. To the micro:bit each is the letter plus `\n`
+over Bluetooth LE UART, resent even when unchanged, so the rover stops by itself 0.5 s after it stops
+hearing from the laptop. Two more lines go only to the micro:bit: `P` (ping; it answers `P`) and
+`T<0-255>` (turn speed).
 
 ## Setup (Python 3.10+)
 
@@ -24,31 +27,53 @@ python -m venv .venv
 
 On macOS allow Bluetooth for your terminal app when asked.
 
-## The rover (`python main.py`)
+## Driving (`python main.py`)
 
 ```
-python main.py                     # Flex + headband: look at a box to drive
-python main.py --devices flex      # just the Flex
+python main.py --rover getoz       # the BrainBit Flex drives the real rover 'BBC micro:bit [getoz]'
+python main.py                     # the Flex drives the simulated rover
 python main.py --source mock       # synthetic EEG: arrow keys = which box the virtual driver looks at
-python main.py --source keyboard   # WASD / arrows, no EEG: try the sim
+python main.py --source keyboard --rover getoz   # WASD / arrows, no EEG: try the real rover
 ```
 
 | flag | meaning |
 | --- | --- |
+| `--rover [NAME]` | drive the real rover (part of its Bluetooth name); turns the simulated one off |
+| `--sim` | with `--rover`: run the simulated rover too |
 | `--source eeg\|mock\|keyboard` | input (default `eeg`) |
-| `--devices LIST` | EEG devices from `config.EEG_DEVICES` (default `flex,headband`) |
+| `--devices LIST` | EEG devices from `config.EEG_DEVICES` (default `flex`; `flex,headband` for both) |
 | `--user NAME` | whose calibration to load / save (default `default`) |
 | `--window S` | SSVEP window, 1-4 s (default: the calibrated one) |
 | `--mock-signal clean\|realistic` | mock: strong flicker response (default), or weak + artifacts + reference pops |
 | `--config-placement` | ignore the electrode positions set in the scope; use `config.EEG_DEVICES` |
 | `--view chase`, `--no-sim`, `--no-log`, `--duration S`, `--screenshot PNG` | |
+| `--camera [N]` | on hold: a live camera in the middle (OpenCV's SDL clashes with pygame on macOS) |
 
 **Keys:** **V** flicker on/off (a photosensitivity warning first, once per session) · **C** calibrate
-· **I** decoder view · **R** measure electrode contact · **P** top-down / chase view · **F5** reset the
-rover · **F12** screenshot · **Esc** quit (sends a final S). Mock: arrows = gaze, **J** = jaw clench.
+· **I** decoder view · **R** measure electrode contact · **P** top-down / chase view and **F5** reset
+(simulated rover) · **F12** screenshot · **Esc** quit (sends a final S). Mock: arrows = gaze,
+**J** = jaw clench.
 
 > **Photosensitivity warning:** the flicker (7.5-20 Hz) can trigger seizures in people with
 > photosensitive epilepsy. It is off by default and shows a full-screen warning first.
+
+### The real rover (`--rover`, `rover/microbit.py`, `firmware/maqueen.ts`)
+
+1. Flash the firmware once: at makecode.microbit.org make a new project, switch to JavaScript, paste
+   `firmware/maqueen.ts`, add the **maqueen** and **bluetooth** extensions (accept removing radio),
+   and in Project Settings choose **No Pairing Required**. Download and copy the .hex onto the
+   MICROBIT drive. Its LEDs show ✗ until the laptop connects, then ✓ (stopped) or an arrow.
+2. Find its name: `python tools/microbit_latency.py --scan` lists the micro:bits in range (on macOS
+   use the name, e.g. `getoz`; the MAC address isn't visible). `python tools/microbit_latency.py getoz`
+   measures the link (it only sends stop and ping): about 50-60 ms round trip.
+3. `python main.py --rover getoz`, with the rover on the floor.
+
+The Bluetooth link runs in its own process, so it can't stall the flicker. It sends each change at
+once plus a keepalive every 0.2 s, sends S itself if the app stalls, quits or crashes, and only drives
+firmware that answers the ping (the old firmware fell seconds behind). Turns run at their own speed,
+`config.MICROBIT_TURN_SPEED` (60 of 255; forward is 130), sent on connect, so it changes without
+re-flashing. After the app restarts, the micro:bit can take 30-60 s to be found again; the app keeps
+retrying.
 
 ### How a box is decoded (`eeg/ssvep.py`)
 
@@ -56,6 +81,7 @@ Three boxes flicker at 8.57 Hz (↑ F), 20 Hz (← L) and 7.5 Hz (→ R), counte
 they need a **60 Hz display with vsync** (the app measures it and warns). Looking away at the rover =
 rest = S. The frequencies stay clear of the driver's alpha rhythm (10-12 Hz, strongest while looking at
 the rover), which made a 10 Hz ↓ box and a 12 Hz ← box drive by themselves (see `config.SSVEP_FRAMES`).
+There is no back box; turning in place covers it.
 
 Every 0.1 s, for each streaming device, on its own clock (nothing is merged):
 
@@ -78,11 +104,13 @@ Every 0.1 s, for each streaming device, on its own clock (nothing is merged):
 The best box wins if its z clears the threshold and beats the runner-up by the margin; the smoother
 then needs N windows in a row before the command changes.
 
-**Moving = stop.** Each device's newest half second is checked against its calm moments: the head
-turning (to look at the rover), electrodes shifting (many samples far out at 6-40 Hz) or a clenched
-jaw (45-100 Hz muscle 3× calm), on at least half the electrodes, stops the rover at once (no
-debounce) and for 1 s after; the dashboard shows **STOP: MOVING** / **STOP: MUSCLE**. Clench to stop.
-Sitting still it never fired on a real calibration (thresholds `MOVE_*` in `config.py`).
+**Moving = stop.** Each device's newest half second is checked against its calm moments. Electrodes
+shifting (many samples far out at 6-40 Hz) or muscle (45-100 Hz above 2× calm: a clenched jaw, or the
+neck tension of holding your head turned toward the rover, which the electrodes at the back of the
+head pick up), on at least half the electrodes, stops the rover at once (no debounce) and for 1 s
+after; the screen shows **Stop: moving** / **Stop: muscle**. Clench to stop. Gentle head turns barely
+show in the EEG; looking away still stops the rover because the flicker response goes. Thresholds:
+`MOVE_*` in `config.py`.
 
 **Calibrate (C)**, ~4.5 min, done as when driving the real rover: low beep, look at the rover (that's
 rest); middle beep, turn back: an arrow points at the next box, 3-2-1; high beep, look at that box
@@ -91,27 +119,33 @@ first. The recording is saved to `recordings/` (the scope can play it back) and 
 and all, through the same smoother for every window length × threshold × margin × debounce (the
 3-2-1 hand-over isn't scored); the fastest setting with < 2% wrong drive commands that keeps still
 while you look at the rover wins and is saved per user (`models/ssvep_<user>.json`). Nothing else is
-learned. Calibrating again adds up: up to 5 calibrations with the same electrodes and the same rest
-(rover, or the older centre cross) are fitted together. A calibration made with other electrodes
-isn't loaded. If no setting reaches half the boxes, it says so and keeps the old one. Uncalibrated defaults never drove on their own on the mock, but a weak
-response needs calibrating to drive at all.
+learned. Calibrating again adds up: up to 5 calibrations with the same electrodes, the same box
+frequencies and the same rest are fitted together; change any of those and it starts from zero
+(settings made for other electrodes or frequencies aren't loaded). If no setting reaches half the
+boxes, it says so and keeps the old one. Uncalibrated defaults never drove on their own on the mock,
+but a weak response needs calibrating to drive at all.
 
-`python tools/ssvep_eval.py recordings/<calibration>.npz` replays calibrations offline (older
-`models/ssvep_*_cal_*.npz` files too): how far the boxes stood out, and what calibration would
-choose. Use it to compare electrode setups.
+`python tools/ssvep_eval.py recordings/<calibration>.npz` replays calibrations offline (`--together`
+fits several as one): how far the boxes stood out, and what calibration would choose. Use it to
+compare electrode setups.
 
 ### Dashboard
 
-Source status, the D-pad with the last command sent, raw vs smoothed prediction, a z bar per box with
-the threshold, the electrodes (dot: green = decoding, red = left out, grey = no data; level in µV with
-the device's shared part removed), the decoded spectrum, the last 10 s of commands, and sinks + FPS.
-**I** shows, per box, the z on each headset and the pooled score over the last 10 s.
+With the real rover (no simulated arena) the middle is the drive view: what's being sent to the rover
+(D-pad and command), each box's live score against the threshold, the stop state, and the rover link.
+Around the boxes: raw vs smoothed prediction, the decoded spectrum, the electrodes (dot: green =
+decoding, red = left out, grey = no data; level in µV with the device's shared part removed), the
+last 10 s of commands, and frame timing. With the simulated rover the arena sits in the middle
+instead. **I** shows, per box, the z on each headset and the pooled score over the last 10 s. While
+calibrating the middle is kept plain for the cue card, arrow and countdown.
 
 ### Safety (every source)
 
 * **Debounce:** a command changes only after the same prediction wins N consecutive windows.
 * **Dead-man:** no fresh prediction for 500 ms → `S`.
-* **10 Hz resend:** the rover can stop itself if it stops hearing from us (the sim does: 0.5 s).
+* **Stop gate:** movement or muscle → `S` at once, no debounce.
+* **Resend:** the real rover's firmware stops 0.5 s after the last command (the sim does too), and
+  its link sends `S` if the app stalls, quits or crashes; turning the flicker off stops it as well.
 * **Obstacle stop:** the sim refuses `F` when its ultrasonic sensor sees anything closer than 15 cm.
 * Every command sent is logged to `logs/session_<time>.csv`.
 
@@ -192,6 +226,8 @@ baseline.
 
 ## BrainBit notes
 
+* The Flex alone drives (the headband covers O1/O2): its leads 1-4 (SDK channels O1, O2, T3, T4) sit
+  at PO1, POz, PO2 and Oz.
 * `config.EEG_DEVICES` says which device is which (pinned by serial) and where each SDK channel sits;
   clicking names in the scope overrides the positions for both apps.
 * Two devices connect one at a time (a Flex v1 stalls if the other is connecting or measuring
@@ -203,7 +239,8 @@ baseline.
 
 ## Tests
 
-No hardware needed (the BrainBit SDK is faked in `tests/fake_neurosdk`):
+No hardware needed (the BrainBit SDK is faked in `tests/fake_neurosdk`, the micro:bit in
+`tests/test_microbit.py`); about 5 minutes:
 
 ```
 python -m pytest
@@ -218,10 +255,13 @@ commands.py          the F/B/L/R/S contract and wire encoding
 eeg/                 shared by both apps: devices.py (live devices + mock, each on its own clock),
                      brainbit.py (SDK thread), mock.py, filters.py, clean.py (noise handling),
                      ssvep.py (decoding + calibration), recording.py (the .npz format)
-rover/               source.py (keyboard + EEG sources), controller.py, smoother.py, sim.py, session_log.py
-ui/                  the rover window: app, arena / chase views, dashboard, decoder view, stimulus
+                     cues.py (cued trials, shared with the scope)
+rover/               source.py (keyboard + EEG sources), controller.py, smoother.py, sim.py, session_log.py,
+                     microbit.py (the real rover over Bluetooth), camera.py (on hold)
+firmware/            maqueen.ts: the micro:bit's MakeCode program
+ui/                  the rover window: app, drive view, arena / chase views, dashboard, decoder view, stimulus
 rawscope/            the scope window: analysis, playback, head map, cues + trials (+ their UI)
-tools/               ssvep_eval.py, brainbit_probe.py
+tools/               ssvep_eval.py, microbit_latency.py, brainbit_probe.py
 attic/               not in the app: the Myo armband (EMG) and alpha mode, kept to bring back later
 tests/               pytest suite
 ```
